@@ -145,6 +145,7 @@ export default function Home() {
       <section className="hero">
         <p className="eyebrow">GPT-5 CFG + ClickHouse demo</p>
         <h1>Ask natural-language questions about NYC taxi trips.</h1>
+        <h2>By Jerry</h2>
         <p className="hero-copy">
           Ask supported taxi analytics questions, inspect the CFG-constrained
           SQL, then run it against ClickHouse when it looks right.
@@ -195,8 +196,7 @@ export default function Home() {
             <div className="empty-state">
               <h2>Ready for a taxi analytics question</h2>
               <p>
-                Choose a reliable demo prompt or type your own. Unsupported
-                questions show the same rejection state the live API will use.
+                Choose a demo prompt or type your own.
               </p>
             </div>
           ) : null}
