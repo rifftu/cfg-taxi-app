@@ -1,4 +1,5 @@
 import { isSqlAcceptedByGrammar } from "@/app/lib/grammar";
+import { getSqlTableIdentifier } from "@/app/lib/tableConfig";
 
 export type SqlValidationResult =
   | {
@@ -12,10 +13,10 @@ export type SqlValidationResult =
 
 const forbiddenKeywordPattern =
   /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|SYSTEM|GRANT|REVOKE|ATTACH|DETACH|OPTIMIZE)\b/i;
-const supportedTable = "nyc_taxi.trips_small";
-
 /** Validates that generated SQL stays inside the supported read-only surface. */
 export function validateSql(sql: string): SqlValidationResult {
+  const supportedTable = getSqlTableIdentifier();
+
   if (sql !== sql.trim()) {
     return reject("SQL must not include leading or trailing whitespace.");
   }
@@ -48,10 +49,10 @@ export function validateSql(sql: string): SqlValidationResult {
     tableReferences.length === 0 ||
     tableReferences.some((tableReference) => tableReference !== supportedTable)
   ) {
-    return reject("SQL may only reference nyc_taxi.trips_small.");
+    return reject(`SQL may only reference ${supportedTable}.`);
   }
 
-  if (!isSqlAcceptedByGrammar(sql)) {
+  if (!isSqlAcceptedByGrammar(sql, supportedTable)) {
     return reject("SQL is outside the supported taxi analytics grammar.");
   }
 

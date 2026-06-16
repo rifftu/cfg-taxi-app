@@ -6,10 +6,10 @@ Build a deployed natural-language analytics app that lets a user ask questions a
 
 ## Dataset
 
-Use the pre-imported ClickHouse Cloud example New York taxi dataset. We intentionally do **not** implement CSV ingestion; the demo relies on the dataset that ships pre-loaded in ClickHouse Cloud, and database setup/credentials are provided externally.
+Use the pre-imported ClickHouse Cloud example New York taxi dataset. We intentionally do **not** implement CSV ingestion; the demo relies on the dataset that ships pre-loaded in ClickHouse Cloud, and database setup/credentials are provided externally. The live SQL surface targets `default.nyc_taxi`; environments can point the same grammar shape at `${CLICKHOUSE_DATABASE}.${CLICKHOUSE_TABLE}` when those env vars identify the sample table.
 
 ```sql
-nyc_taxi.trips_small (
+default.nyc_taxi (
     trip_id             UInt32,
     pickup_datetime     DateTime,
     dropoff_datetime    DateTime,
@@ -33,7 +33,7 @@ nyc_taxi.trips_small (
 This dataset is demo-friendly because it has timestamps, money fields, categories, and intuitive analytics questions. The example prompts throughout this spec (including "last 30 hours") are illustrative of the *kind* of questions the app handles, not fixed requirements to build toward. Because the data is historical, the default demo behavior should interpret relative time windows against the latest timestamp in the dataset rather than wall-clock `now()`. For example, "last 30 hours" should map to:
 
 ```sql
-pickup_datetime >= (SELECT max(pickup_datetime) FROM nyc_taxi.trips_small) - INTERVAL 30 HOUR
+pickup_datetime >= (SELECT max(pickup_datetime) FROM default.nyc_taxi) - INTERVAL 30 HOUR
 ```
 
 ## Architecture
@@ -41,13 +41,17 @@ pickup_datetime >= (SELECT max(pickup_datetime) FROM nyc_taxi.trips_small) - INT
 ```mermaid
 flowchart LR
     User[User] --> WebApp[Next.js UI]
-    WebApp --> ApiRoute[POST /api/query]
-    ApiRoute --> OpenAI[GPT-5 Responses API]
-    OpenAI --> ApiRoute
-    ApiRoute --> Safety[SQL Safety Validator]
+    WebApp --> GenerateRoute[POST /api/generate-sql]
+    GenerateRoute --> CFGOpenAI[GPT-5 CFG SQL call]
+    GenerateRoute --> ControlOpenAI[GPT-5 JSON control SQL call]
+    CFGOpenAI --> GenerateRoute
+    ControlOpenAI --> GenerateRoute
+    GenerateRoute --> WebApp
+    WebApp --> ExecuteRoute[POST /api/execute-sql]
+    ExecuteRoute --> Safety[SQL Safety Validator]
     Safety --> ClickHouse[ClickHouse Cloud]
-    ClickHouse --> ApiRoute
-    ApiRoute --> WebApp
+    ClickHouse --> ExecuteRoute
+    ExecuteRoute --> WebApp
 ```
 
 ## Tech Stack
@@ -65,8 +69,10 @@ The main page should provide:
 
 - A textarea for a natural-language question.
 - Example prompt buttons for reliable demo queries.
-- A submit button with loading, error, and rejection states.
-- A generated SQL preview.
+- A submit button with loading, error, and rejection states for SQL generation.
+- A generated SQL preview before execution.
+- A non-CFG SQL comparison preview that is clearly labeled display-only.
+- A separate button to run the proposed SQL against ClickHouse.
 - A results table for returned ClickHouse rows.
 - A clear rejection message when the question is out of scope (no SQL is generated or executed).
 - A small metadata area showing execution duration and row count.
@@ -80,10 +86,10 @@ Example prompts:
 
 ## Backend API
 
-Endpoint:
+Generate endpoint:
 
 ```text
-POST /api/query
+POST /api/generate-sql
 ```
 
 Request:
@@ -98,11 +104,14 @@ Response:
 
 ```json
 {
-  "question": "Sum the total amount for taxi trips in the last 30 hours.",
-  "sql": "SELECT sum(total_amount) FROM nyc_taxi.trips_small WHERE pickup_datetime >= (SELECT max(pickup_datetime) FROM nyc_taxi.trips_small) - INTERVAL 30 HOUR;",
-  "rows": [{ "sum(total_amount)": 12345.67 }],
-  "rowCount": 1,
-  "durationMs": 215
+  "cfg": {
+    "question": "Sum the total amount for taxi trips in the last 30 hours.",
+    "sql": "SELECT sum(total_amount) FROM default.nyc_taxi WHERE pickup_datetime >= (SELECT max(pickup_datetime) FROM default.nyc_taxi) - INTERVAL 30 HOUR;"
+  },
+  "control": {
+    "sql": "SELECT sum(total_amount) FROM default.nyc_taxi WHERE pickup_datetime >= now() - INTERVAL 30 HOUR;",
+    "notes": "Non-CFG comparison query; shown for display only."
+  }
 }
 ```
 
@@ -110,8 +119,14 @@ Rejection response (question is out of scope — the model did not call the tool
 
 ```json
 {
-  "rejected": true,
-  "message": "That question can't be answered with the supported taxi trip analytics."
+  "cfg": {
+    "rejected": true,
+    "message": "That question can't be answered with the supported taxi trip analytics."
+  },
+  "control": {
+    "sql": "SELECT min(pickup_datetime), max(pickup_datetime) FROM default.nyc_taxi;",
+    "notes": "Uses min/max timestamps to answer the requested dataset range."
+  }
 }
 ```
 
@@ -119,9 +134,46 @@ Error response (unexpected failure, or a tool call that fails safety validation)
 
 ```json
 {
-  "error": "Unable to generate a supported read-only query."
+  "cfg": {
+    "error": "Unable to generate a supported read-only query."
+  },
+  "control": {
+    "error": "Unable to generate comparison SQL."
+  }
 }
 ```
+
+Execute endpoint:
+
+```text
+POST /api/execute-sql
+```
+
+Request:
+
+```json
+{
+  "question": "Sum the total amount for taxi trips in the last 30 hours.",
+  "sql": "SELECT sum(total_amount) FROM default.nyc_taxi WHERE pickup_datetime >= (SELECT max(pickup_datetime) FROM default.nyc_taxi) - INTERVAL 30 HOUR;"
+}
+```
+
+Response:
+
+```json
+{
+  "question": "Sum the total amount for taxi trips in the last 30 hours.",
+  "sql": "SELECT sum(total_amount) FROM default.nyc_taxi WHERE pickup_datetime >= (SELECT max(pickup_datetime) FROM default.nyc_taxi) - INTERVAL 30 HOUR;",
+  "rows": [{ "sum(total_amount)": 12345.67 }],
+  "rowCount": 1,
+  "durationMs": 215
+}
+```
+
+The server re-validates SQL in `POST /api/execute-sql` before executing it, even
+though the SQL was already generated and validated by `POST /api/generate-sql`.
+Only `cfg.sql` is executable. `control.sql` is generated by a non-CFG JSON-only
+model call for side-by-side comparison and is never accepted by the execution UI.
 
 ## GPT-5 CFG Integration
 
@@ -134,7 +186,7 @@ tools: [
     type: "custom",
     name: "clickhouse_sql",
     description:
-      "Generate exactly one read-only ClickHouse SELECT query for nyc_taxi.trips_small. Use only allowed columns, aggregations, filters, grouping, ordering, and limits. The output must obey the grammar. Only call this tool when the user's question can be answered by a query within the supported surface area; otherwise do not call it.",
+      "Generate exactly one read-only ClickHouse SELECT query for default.nyc_taxi. Use only allowed columns, aggregations, filters, grouping, ordering, and limits. The output must obey the grammar. Only call this tool when the user's question can be answered by a query within the supported surface area; otherwise do not call it.",
     format: {
       type: "grammar",
       syntax: "lark",
@@ -145,6 +197,41 @@ tools: [
 tool_choice: "auto",
 parallel_tool_calls: false,
 reasoning: { effort: "medium" },
+```
+
+### Non-CFG control SQL
+
+`POST /api/generate-sql` also makes a second OpenAI call in parallel without CFG
+constraints. This output is for comparison only and is not executable through the
+UI. The control prompt asks for JSON only:
+
+```text
+You are a text-to-SQL assistant for ClickHouse.
+
+Table: default.nyc_taxi
+
+Columns:
+- pickup_datetime
+- dropoff_datetime
+- passenger_count
+- trip_distance
+- fare_amount
+- tip_amount
+- total_amount
+- payment_type
+- pickup_ntaname
+- dropoff_ntaname
+
+Return JSON only in this shape:
+{
+  "sql": "SELECT ...;",
+  "notes": "brief explanation of assumptions"
+}
+
+Rules:
+- Generate one ClickHouse SQL query.
+- Return read-only SELECT queries.
+- Do not wrap the JSON in Markdown.
 ```
 
 ### Rejecting out-of-scope questions
@@ -196,10 +283,10 @@ Grammar correctness is tested deterministically, **without** involving the LLM, 
 1. **Deterministic accept/reject corpus (no AI).** Compile the exact grammar with the same engine OpenAI uses — [LLGuidance](https://github.com/guidance-ai/llguidance) — and assert a hand-written corpus of strings parses or fails as expected. The simplest path is the `guidance-lark-mcp` tool (`uvx guidance-lark-mcp`), which exposes `validate_grammar` (checks the grammar compiles and is internally consistent) and `run_batch_validation_tests` (runs a JSON corpus of `{ "input": "...", "should_parse": true|false }` cases and returns pass/fail). Equivalent options: the `llguidance` Python package, its `sample_parser` Rust CLI, or the `lark` Python parser. We standardize on LLGuidance because Lark-the-parser and LLGuidance-the-constrainer can diverge, and LLGuidance is what actually constrains sampling in the API.
 
    The corpus must include **negative** cases that prove the grammar rejects what it should, e.g.:
-   - `SELECT * FROM nyc_taxi.trips_small;` → should_parse: false
-   - `DROP TABLE nyc_taxi.trips_small;` → should_parse: false
-   - `SELECT payment_type, sum(total_amount) FROM nyc_taxi.trips_small GROUP BY pickup_ntaname;` → should_parse: false (projection/GROUP BY mismatch)
-   - `SELECT sum(total_amount) FROM nyc_taxi.trips_small;` → should_parse: true
+   - `SELECT * FROM default.nyc_taxi;` → should_parse: false
+   - `DROP TABLE default.nyc_taxi;` → should_parse: false
+   - `SELECT payment_type, sum(total_amount) FROM default.nyc_taxi GROUP BY pickup_ntaname;` → should_parse: false (projection/GROUP BY mismatch)
+   - `SELECT sum(total_amount) FROM default.nyc_taxi;` → should_parse: true
 
 2. **Live API acceptance.** Submit the grammar to the OpenAI API once (any trivial prompt). The API rejects grammars that are too complex, so this confirms the grammar is usable at all. This needs only `OPENAI_API_KEY`, not ClickHouse, so it runs early (see plan Phase 2 spike).
 
@@ -214,7 +301,7 @@ The grammar is the first safety layer, but the backend should also validate SQL 
 - Must start with `SELECT`.
 - Must end with exactly one semicolon.
 - Must not contain forbidden keywords: `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `TRUNCATE`, `CREATE`, `SYSTEM`, `GRANT`, `REVOKE`, `ATTACH`, `DETACH`, `OPTIMIZE`.
-- Must reference only `nyc_taxi.trips_small`.
+- Must reference only `default.nyc_taxi`.
 - Must reference only allowed columns and functions.
 - Must not contain comments.
 - Must not contain multiple statements.
@@ -258,8 +345,8 @@ OPENAI_MODEL=gpt-5-nano
 CLICKHOUSE_HOST=
 CLICKHOUSE_USERNAME=
 CLICKHOUSE_PASSWORD=
-CLICKHOUSE_DATABASE=nyc_taxi
-CLICKHOUSE_TABLE=trips_small
+CLICKHOUSE_DATABASE=default
+CLICKHOUSE_TABLE=nyc_taxi
 ```
 
 ## Deployment

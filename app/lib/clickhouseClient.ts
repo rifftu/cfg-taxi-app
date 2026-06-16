@@ -23,6 +23,10 @@ export function createClickHouseExecutor(): QueryExecutor {
         username,
         password,
         database,
+        request_timeout: 90_000,
+        keep_alive: {
+          enabled: false,
+        },
       });
       const result = await client.query({
         query: sql,

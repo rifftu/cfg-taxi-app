@@ -8,6 +8,16 @@ export type QuerySuccessResponse = {
   durationMs: number;
 };
 
+export type SqlProposalResponse = {
+  question: string;
+  sql: string;
+};
+
+export type ControlSqlResponse = {
+  sql: string;
+  notes?: string;
+};
+
 export type QueryRejectedResponse = {
   rejected: true;
   message: string;
@@ -21,6 +31,22 @@ export type QueryResponse =
   | QuerySuccessResponse
   | QueryRejectedResponse
   | QueryErrorResponse;
+
+export type GenerateSqlResponse =
+  | SqlProposalResponse
+  | QueryRejectedResponse
+  | QueryErrorResponse;
+
+export type GenerateSqlComparisonResponse = {
+  cfg: GenerateSqlResponse;
+  control: ControlSqlResponse | QueryErrorResponse;
+};
+
+export type GenerateSqlApiResponse =
+  | GenerateSqlComparisonResponse
+  | QueryErrorResponse;
+
+export type ExecuteSqlResponse = QuerySuccessResponse | QueryErrorResponse;
 
 export const rejectionMessage =
   "That question can't be answered with the supported taxi trip analytics.";

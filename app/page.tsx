@@ -2,12 +2,20 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import { examplePrompts } from "@/app/lib/examples";
-import type { QueryResponse, QuerySuccessResponse } from "@/app/lib/queryTypes";
+import type {
+  ControlSqlResponse,
+  ExecuteSqlResponse,
+  GenerateSqlApiResponse,
+  QueryErrorResponse,
+  QueryRejectedResponse,
+  QuerySuccessResponse,
+  SqlProposalResponse,
+} from "@/app/lib/queryTypes";
 
 const initialQuestion = examplePrompts[0];
 
 function isSuccessResponse(
-  response: QueryResponse | null,
+  response: ExecuteSqlResponse | null,
 ): response is QuerySuccessResponse {
   return Boolean(response && "rows" in response);
 }
@@ -15,49 +23,120 @@ function isSuccessResponse(
 /** Renders the taxi analytics demo shell. */
 export default function Home() {
   const [question, setQuestion] = useState<string>(initialQuestion);
-  const [response, setResponse] = useState<QueryResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [proposal, setProposal] = useState<SqlProposalResponse | null>(null);
+  const [controlResult, setControlResult] = useState<
+    ControlSqlResponse | QueryErrorResponse | null
+  >(null);
+  const [rejection, setRejection] = useState<QueryRejectedResponse | null>(null);
+  const [executionResponse, setExecutionResponse] =
+    useState<ExecuteSqlResponse | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isExecuting, setIsExecuting] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
 
   const columns = useMemo(() => {
-    if (!isSuccessResponse(response)) {
+    if (!isSuccessResponse(executionResponse)) {
       return [];
     }
 
     return Array.from(
-      response.rows.reduce((keys, row) => {
+      executionResponse.rows.reduce((keys, row) => {
         Object.keys(row).forEach((key) => keys.add(key));
         return keys;
       }, new Set<string>()),
     );
-  }, [response]);
+  }, [executionResponse]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setIsLoading(true);
+  function updateQuestion(nextQuestion: string) {
+    setQuestion(nextQuestion);
+    setProposal(null);
+    setControlResult(null);
+    setRejection(null);
+    setExecutionResponse(null);
     setRequestError(null);
-    setResponse(null);
+  }
+
+  async function handleGenerateSql(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsGenerating(true);
+    setRequestError(null);
+    setProposal(null);
+    setControlResult(null);
+    setRejection(null);
+    setExecutionResponse(null);
 
     try {
-      const result = await fetch("/api/query", {
+      const result = await fetch("/api/generate-sql", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ question }),
       });
-      const data = (await result.json()) as QueryResponse;
+      const data = (await result.json()) as GenerateSqlApiResponse;
 
       if (!result.ok && "error" in data) {
         setRequestError(data.error);
         return;
       }
 
-      setResponse(data);
+      if (!("cfg" in data)) {
+        setRequestError("Unable to generate a supported read-only query.");
+        return;
+      }
+
+      setControlResult(data.control);
+
+      if ("rejected" in data.cfg) {
+        setRejection(data.cfg);
+        return;
+      }
+
+      if ("sql" in data.cfg) {
+        setProposal(data.cfg);
+        return;
+      }
+
+      setRequestError(data.cfg.error);
     } catch {
-      setRequestError("Unable to reach the local query API.");
+      setRequestError("Unable to reach the SQL generation API.");
     } finally {
-      setIsLoading(false);
+      setIsGenerating(false);
+    }
+  }
+
+  async function handleExecuteSql() {
+    if (!proposal) {
+      return;
+    }
+
+    setIsExecuting(true);
+    setRequestError(null);
+    setExecutionResponse(null);
+
+    try {
+      const result = await fetch("/api/execute-sql", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: proposal.question,
+          sql: proposal.sql,
+        }),
+      });
+      const data = (await result.json()) as ExecuteSqlResponse;
+
+      if (!result.ok && "error" in data) {
+        setRequestError(data.error);
+        return;
+      }
+
+      setExecutionResponse(data);
+    } catch {
+      setRequestError("Unable to reach the SQL execution API.");
+    } finally {
+      setIsExecuting(false);
     }
   }
 
@@ -67,19 +146,19 @@ export default function Home() {
         <p className="eyebrow">GPT-5 CFG + ClickHouse demo</p>
         <h1>Ask natural-language questions about NYC taxi trips.</h1>
         <p className="hero-copy">
-          Ask supported taxi analytics questions, preview the CFG-constrained
-          SQL, and inspect the rows returned by the query API.
+          Ask supported taxi analytics questions, inspect the CFG-constrained
+          SQL, then run it against ClickHouse when it looks right.
         </p>
       </section>
 
       <section className="workspace" aria-label="Taxi analytics query builder">
         <div className="query-panel">
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleGenerateSql}>
             <label htmlFor="question">Question</label>
             <textarea
               id="question"
               value={question}
-              onChange={(event) => setQuestion(event.target.value)}
+              onChange={(event) => updateQuestion(event.target.value)}
               placeholder="Ask about totals, tips, payment types, neighborhoods, passengers, or time windows."
               rows={6}
             />
@@ -90,21 +169,29 @@ export default function Home() {
                   className="example-button"
                   key={prompt}
                   type="button"
-                  onClick={() => setQuestion(prompt)}
+                  onClick={() => updateQuestion(prompt)}
                 >
                   {prompt}
                 </button>
               ))}
             </div>
 
-            <button className="submit-button" type="submit" disabled={isLoading}>
-              {isLoading ? "Generating query..." : "Generate SQL"}
+            <button
+              className="submit-button"
+              type="submit"
+              disabled={isGenerating || isExecuting}
+            >
+              {isGenerating ? "Generating SQL..." : "Generate SQL"}
             </button>
           </form>
         </div>
 
         <div className="results-panel">
-          {!response && !requestError ? (
+          {!proposal &&
+          !controlResult &&
+          !rejection &&
+          !executionResponse &&
+          !requestError ? (
             <div className="empty-state">
               <h2>Ready for a taxi analytics question</h2>
               <p>
@@ -114,45 +201,83 @@ export default function Home() {
             </div>
           ) : null}
 
+          {proposal || controlResult || rejection ? (
+            <div className="comparison-grid" aria-label="SQL comparison">
+              <section className="sql-card" aria-labelledby="cfg-sql-heading">
+                <p className="card-label">CFG constrained</p>
+                <h2 id="cfg-sql-heading">
+                  {proposal ? "Executable SQL" : "No executable SQL"}
+                </h2>
+                {proposal ? (
+                  <>
+                  <pre>{proposal.sql}</pre>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    disabled={isExecuting}
+                    onClick={handleExecuteSql}
+                  >
+                    {isExecuting ? "Running query..." : "Run against ClickHouse"}
+                  </button>
+                  </>
+                ) : null}
+                {rejection ? (
+                  <div className="inline-rejection" role="status">
+                    <h3>Question rejected</h3>
+                    <p>{rejection.message}</p>
+                  </div>
+                ) : null}
+              </section>
+
+              {controlResult ? (
+                <section className="sql-card control-card" aria-labelledby="control-sql-heading">
+                  <p className="card-label">Non-CFG comparison only</p>
+                  <h2 id="control-sql-heading">Display-only SQL</h2>
+                  {"error" in controlResult ? (
+                    <p className="control-warning">{controlResult.error}</p>
+                  ) : (
+                    <>
+                      <pre>{controlResult.sql}</pre>
+                      {controlResult.notes ? (
+                        <p className="control-notes">{controlResult.notes}</p>
+                      ) : null}
+                    </>
+                  )}
+                  <p className="control-warning">
+                    This SQL is not CFG-constrained and cannot be executed from this UI.
+                  </p>
+                </section>
+              ) : null}
+            </div>
+          ) : null}
+
           {requestError ? (
             <div className="notice notice-error" role="alert">
               {requestError}
             </div>
           ) : null}
 
-          {response && "rejected" in response ? (
-            <div className="notice notice-rejected" role="status">
-              <h2>Question rejected</h2>
-              <p>{response.message}</p>
-            </div>
-          ) : null}
-
-          {isSuccessResponse(response) ? (
+          {isSuccessResponse(executionResponse) ? (
             <div className="result-stack">
               <div className="metadata-grid" aria-label="Query metadata">
                 <div>
                   <span>Rows</span>
-                  <strong>{response.rowCount}</strong>
+                  <strong>{executionResponse.rowCount}</strong>
                 </div>
                 <div>
                   <span>Duration</span>
-                  <strong>{response.durationMs} ms</strong>
+                  <strong>{executionResponse.durationMs} ms</strong>
                 </div>
                 <div>
                   <span>Mode</span>
-                  <strong>Mock</strong>
+                  <strong>Live</strong>
                 </div>
               </div>
-
-              <section className="sql-card" aria-labelledby="sql-heading">
-                <h2 id="sql-heading">Generated SQL preview</h2>
-                <pre>{response.sql}</pre>
-              </section>
 
               <section className="table-card" aria-labelledby="results-heading">
                 <h2 id="results-heading">Result rows</h2>
                 <div className="table-scroll">
-                  {response.rows.length === 0 ? (
+                  {executionResponse.rows.length === 0 ? (
                     <p className="no-rows">No rows returned for this query.</p>
                   ) : (
                     <table>
@@ -164,8 +289,8 @@ export default function Home() {
                         </tr>
                       </thead>
                       <tbody>
-                        {response.rows.map((row, rowIndex) => (
-                          <tr key={`${response.question}-${rowIndex}`}>
+                        {executionResponse.rows.map((row, rowIndex) => (
+                          <tr key={`${executionResponse.question}-${rowIndex}`}>
                             {columns.map((column) => (
                               <td key={column}>{formatCellValue(row[column])}</td>
                             ))}

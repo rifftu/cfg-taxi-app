@@ -14,7 +14,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:grammar": "tsx scripts/run-grammar-corpus.ts",
-    "eval": "tsx evals/run-evals.ts"
+    "test:clickhouse-corpus": "tsx scripts/run-clickhouse-corpus.ts",
+    "smoke:prompts": "tsx scripts/run-smoke-prompts.ts",
+    "eval": "tsx evals/run-evals.ts",
+    "verify": "npm audit --omit=dev && npm run test && npm run test:grammar && npm run lint && npm run typecheck && npm run build",
+    "verify:live": "npm run test:clickhouse-corpus && npm run eval && npm run smoke:prompts"
   },
   "dependencies": {
     "@clickhouse/client": "^1.20.0",

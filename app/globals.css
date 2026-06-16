@@ -72,9 +72,6 @@ p {
 }
 
 h1 {
-  font-size: clamp(2.4rem, 6vw, 5rem);
-  letter-spacing: -0.07em;
-  line-height: 0.95;
   margin-bottom: 22px;
 }
 
@@ -178,6 +175,17 @@ textarea:focus {
   width: 100%;
 }
 
+.secondary-button {
+  background: rgba(104, 211, 145, 0.12);
+  border: 1px solid rgba(104, 211, 145, 0.52);
+  border-radius: 999px;
+  color: var(--accent);
+  font-weight: 800;
+  margin-top: 16px;
+  padding: 12px 18px;
+  width: 100%;
+}
+
 .results-panel {
   align-content: start;
   display: grid;
@@ -228,6 +236,56 @@ textarea:focus {
 .result-stack {
   display: grid;
   gap: 16px;
+}
+
+.comparison-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.card-label {
+  color: var(--accent);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.control-card {
+  border-color: rgba(253, 230, 138, 0.38);
+}
+
+.control-warning,
+.control-notes {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 14px 0 0;
+}
+
+.control-warning {
+  color: var(--warning);
+}
+
+.inline-rejection {
+  background: rgba(253, 230, 138, 0.08);
+  border: 1px solid rgba(253, 230, 138, 0.32);
+  border-radius: 16px;
+  color: var(--warning);
+  line-height: 1.5;
+  margin-top: 14px;
+  padding: 16px;
+}
+
+.inline-rejection h3 {
+  color: var(--text);
+  font-size: 1rem;
+  margin: 0 0 10px;
+}
+
+.inline-rejection p {
+  margin-bottom: 0;
 }
 
 .metadata-grid {
@@ -309,6 +367,10 @@ td {
   }
 
   .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .comparison-grid {
     grid-template-columns: 1fr;
   }
 

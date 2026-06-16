@@ -24,10 +24,14 @@ npm run dev
 npm run lint
 npm run test
 npm run test:grammar
+npm run test:clickhouse-corpus
 npm run test:watch
 npm run typecheck
 npm run build
 npm run eval
+npm run smoke:prompts
+npm run verify
+npm run verify:live
 ```
 
 ## Environment
@@ -41,13 +45,19 @@ OPENAI_MODEL=gpt-5-nano
 CLICKHOUSE_HOST=
 CLICKHOUSE_USERNAME=
 CLICKHOUSE_PASSWORD=
-CLICKHOUSE_DATABASE=nyc_taxi
-CLICKHOUSE_TABLE=trips_small
+CLICKHOUSE_DATABASE=default
+CLICKHOUSE_TABLE=nyc_taxi
 ```
 
 `OPENAI_MODEL` defaults to `gpt-5-nano` in code. Use that for the cheapest
 GPT-5 CFG-capable path first; switch to `gpt-5-mini` if live evals show routing
 quality is not reliable enough.
+
+The generated SQL table defaults to `nyc_taxi.trips_small`. When
+`CLICKHOUSE_DATABASE` and `CLICKHOUSE_TABLE` are both set, live OpenAI grammar
+generation and safety validation use `${CLICKHOUSE_DATABASE}.${CLICKHOUSE_TABLE}`
+instead. This lets local credentials point at the actual ClickHouse sample table
+without changing the offline corpus defaults.
 
 ## Phase 2 Dependency Notes
 
@@ -66,5 +76,31 @@ Grammar corpus validation runs through `npm run test:grammar`. The script uses
 `uvx --from llguidance` to compile the grammar with LLGuidance without adding a
 global install, then runs the checked-in accept/reject corpus.
 
-`npm run eval` validates the eval definitions locally. Live GPT-5 eval execution
-is intentionally skipped until `OPENAI_API_KEY` is available in Phase 3.
+## Validation
+
+Before deploying, run the local verification suite:
+
+```bash
+npm run verify
+```
+
+When `.env.local` contains live OpenAI and ClickHouse credentials, run:
+
+```bash
+npm run verify:live
+```
+
+This is equivalent to:
+
+```bash
+npm run test:clickhouse-corpus
+npm run eval
+npm run smoke:prompts
+```
+
+`npm run test:clickhouse-corpus` executes the positive deterministic grammar
+corpus against ClickHouse. `npm run eval` runs live GPT-5 CFG routing evals and
+executes generated SQL when ClickHouse credentials are present. `npm run
+smoke:prompts` runs the visible demo prompts through the split generation flow:
+CFG SQL plus a non-CFG comparison SQL are generated first, then only the CFG SQL
+is executed.
