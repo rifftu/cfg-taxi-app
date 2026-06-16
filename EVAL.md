@@ -65,11 +65,11 @@ ClickHouse execution.
 Live evals require `.env.local` with:
 
 ```text
-OPENAI_API_KEY=
+OPENAI_API_KEY= {ask me or use your own!}
 OPENAI_MODEL=gpt-5-nano
-CLICKHOUSE_HOST=
-CLICKHOUSE_USERNAME=
-CLICKHOUSE_PASSWORD=
+CLICKHOUSE_HOST=https://s3rz1tfs5p.us-central1.gcp.clickhouse.cloud:8443
+CLICKHOUSE_USERNAME=default
+CLICKHOUSE_PASSWORD= {ask me}
 CLICKHOUSE_DATABASE=default
 CLICKHOUSE_TABLE=nyc_taxi
 ```

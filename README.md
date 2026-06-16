@@ -27,4 +27,5 @@ validate OpenAI and ClickHouse end-to-end.
 
 - Development setup: [DEVELOPMENT.md](./DEVELOPMENT.md)
 - Deployment guide: [DEPLOYMENT.md](./DEPLOYMENT.md)
+- Test / Eval guide: [EVAL.md](./EVAL.md)
 - Technical spec: [system-design-tech-spec.md](./system-design-tech-spec.md)
