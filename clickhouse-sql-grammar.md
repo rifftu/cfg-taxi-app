@@ -1,73 +1,146 @@
-# ClickHouse SQL Grammar (CFG)
+# ClickHouse SQL Grammar
 
-This is the Lark context-free grammar that constrains GPT-5's generated ClickHouse SQL for the `nyc_taxi.trips_small` dataset. It is referenced by [system-design-tech-spec.md](/Users/jerrylai/git/cursor-sandbox-gpt/system-design-tech-spec.md); see that doc for the overall architecture, the supported SQL surface area, and the validation strategy.
+This document explains the grammar we currently use for the CFG-backed SQL path.
+The source of truth is `app/lib/grammar.ts`; this document describes the contract and the design tradeoffs.
 
-This is the intended starting point, not the final grammar. It should be validated against the OpenAI API and simplified if the API rejects it as too complex.
+## What The Grammar Is For
 
-## Grammar
+The grammar constrains GPT's `clickhouse_sql` custom tool output to a small, read-only subset of ClickHouse SQL for the taxi demo. If the model calls the CFG tool, it cannot emit arbitrary text or arbitrary SQL; it must emit one string accepted by this grammar.
 
-```lark
-SP: " "
-COMMA: ","
-SEMI: ";"
-NUMBER: /[0-9]+/
-DECIMAL: /[0-9]+\.[0-9]+/
+That gives us deterministic guarantees that prompting alone cannot give:
 
-start: select_stmt
+- No destructive statements.
+- No stacked statements.
+- No `SELECT *`.
+- No arbitrary table names.
+- No arbitrary functions or columns.
+- No grouped query where the projected column and `GROUP BY` column disagree.
 
-select_stmt: simple_select SEMI
-           | grouped_select SEMI
+The grammar does not make the model smarter. It makes unsupported output shapes unrepresentable on the trusted execution path.
 
-simple_select: "SELECT" SP aggregate SP "FROM" SP table where_clause?
+## Runtime Table
 
-// Grouped queries use one rigid template per group column so the projected
-// column and the GROUP BY column can never diverge (invalid in ClickHouse).
-grouped_select: "SELECT" SP grouped_body order_clause? limit_clause?
+The checked-in offline corpus still uses `nyc_taxi.trips_small` as its canonical fixture table. At runtime, `createClickHouseSqlGrammar(tableIdentifier)` renders the same grammar shape with the configured table identifier. In the current live environment that table is:
 
-grouped_body: "payment_type" COMMA SP aggregate SP "FROM" SP table where_clause? SP "GROUP" SP "BY" SP "payment_type"
-            | "pickup_ntaname" COMMA SP aggregate SP "FROM" SP table where_clause? SP "GROUP" SP "BY" SP "pickup_ntaname"
-            | "dropoff_ntaname" COMMA SP aggregate SP "FROM" SP table where_clause? SP "GROUP" SP "BY" SP "dropoff_ntaname"
-            | "passenger_count" COMMA SP aggregate SP "FROM" SP table where_clause? SP "GROUP" SP "BY" SP "passenger_count"
-
-table: "nyc_taxi.trips_small"
-
-aggregate: "count()"
-         | "sum(total_amount)"
-         | "avg(total_amount)"
-         | "sum(fare_amount)"
-         | "avg(tip_amount)"
-         | "avg(trip_distance)"
-
-where_clause: SP "WHERE" SP condition
-            | SP "WHERE" SP condition SP "AND" SP condition
-            | SP "WHERE" SP condition SP "AND" SP condition SP "AND" SP condition
-
-condition: time_condition
-         | payment_condition
-         | passenger_condition
-         | distance_condition
-         | amount_condition
-
-time_condition: "pickup_datetime" SP ">=" SP "(SELECT max(pickup_datetime) FROM nyc_taxi.trips_small)" SP "-" SP "INTERVAL" SP NUMBER SP time_unit
-time_unit: "HOUR" | "DAY"
-
-payment_condition: "payment_type" SP "=" SP payment_value
-payment_value: "'CSH'" | "'CRE'" | "'NOC'" | "'DIS'" | "'UNK'"
-
-passenger_condition: "passenger_count" SP comparator SP NUMBER
-distance_condition: "trip_distance" SP comparator SP number_value
-amount_condition: "total_amount" SP comparator SP number_value
-number_value: NUMBER | DECIMAL
-comparator: ">" | ">=" | "<" | "<=" | "="
-
-// ORDER BY is restricted to the aggregate (the leaderboard case) so the grammar
-// cannot order by an ungrouped, unaggregated column.
-order_clause: SP "ORDER" SP "BY" SP aggregate SP order_dir
-order_dir: "DESC" | "ASC"
-
-limit_clause: SP "LIMIT" SP NUMBER
+```text
+default.nyc_taxi
 ```
 
-## Design notes
+This lets the deterministic corpus remain stable while live OpenAI generation and SQL validation target the actual ClickHouse sample table.
 
-Two correctness decisions are baked into this grammar: grouped queries are expanded as one rigid template per group column so the projection and `GROUP BY` columns always match, and `ORDER BY` is limited to the aggregate so the result can never sort by an ungrouped column. `NUMBER` and `DECIMAL` are disjoint (`DECIMAL` requires a dot) to avoid greedy-lexer ambiguity. If the API still reports the grammar as too complex, reduce the aggregate/condition lists further.
+## Supported Query Families
+
+The grammar intentionally supports analytics summaries, not general text-to-SQL. There are two top-level query shapes:
+
+```sql
+SELECT <aggregate> FROM <table> [WHERE ...];
+```
+
+```sql
+SELECT <group_column>, <aggregate>
+FROM <table>
+[WHERE ...]
+GROUP BY <same_group_column>
+[ORDER BY <same_aggregate> ASC|DESC]
+[LIMIT <number>];
+```
+
+The allowed aggregate functions are:
+
+- `count()`
+- `sum(total_amount)`
+- `avg(total_amount)`
+- `sum(fare_amount)`
+- `avg(tip_amount)`
+- `avg(trip_distance)`
+
+The allowed grouped dimensions are:
+
+- `payment_type`
+- `pickup_ntaname`
+- `dropoff_ntaname`
+- `passenger_count`
+
+The allowed filters are:
+
+- Dataset-relative pickup time windows: `pickup_datetime >= (SELECT max(pickup_datetime) FROM <table>) - INTERVAL N HOUR|DAY`
+- Payment type equality for `CSH`, `CRE`, `NOC`, `DIS`, or `UNK`.
+- `passenger_count` comparisons.
+- `trip_distance` comparisons.
+- `total_amount` comparisons.
+
+## Intentional Gaps
+
+This is not a comprehensive grammar for the taxi dataset. It intentionally rejects reasonable questions that would require unsupported SQL, such as:
+
+- Earliest/latest timestamps with `min(pickup_datetime)` or `max(pickup_datetime)`.
+- Percentiles, medians, standard deviation, or other statistical functions.
+- Time bucketing by hour/day/month.
+- Raw row inspection.
+- Multi-column grouping.
+- Route analysis from pickup to dropoff pairs.
+- Neighborhood-name equality filters.
+- Aliases such as `AS total_revenue`.
+- Joins, subqueries other than the dataset-relative time anchor, CTEs, or unions.
+
+Those gaps are acceptable for the current demo because the goal is to prove the CFG-constrained path on a known set of demo questions, not to maximize natural language query coverage.
+
+## Important Design Choices
+
+Grouped queries are written as rigid templates, one per group column. This is deliberate. It prevents invalid ClickHouse SQL like:
+
+```sql
+SELECT payment_type, sum(total_amount)
+FROM default.nyc_taxi
+GROUP BY pickup_ntaname;
+```
+
+`ORDER BY` is limited to the aggregate expression. That avoids sorting grouped results by a column that is neither grouped nor aggregated.
+
+Aliases are not allowed. They would improve readability, but they also add more surface area to parse and validate. The UI can display raw ClickHouse column names for this demo.
+
+Only one, two, or three `WHERE` conditions are allowed. This keeps the grammar small and avoids recursive condition expressions. If we need more flexibility, we should add it intentionally with tests.
+
+Whitespace is strict. The grammar emits a normalized SQL style with exact spaces. That makes validation and comparison easier, but means hand-written SQL with different spacing may fail the deterministic parser even if ClickHouse would accept it.
+
+## Safety Model
+
+The grammar is the first safety layer, not the only safety layer.
+
+The execution path is:
+
+1. GPT emits a `clickhouse_sql` tool call constrained by the grammar.
+2. The server extracts the SQL from the tool call.
+3. `validateSql()` checks statement shape, comments, forbidden keywords, table references, and grammar membership again.
+4. ClickHouse executes only SQL that passed validation.
+
+This means a grammar-valid query still has to pass server-side validation before execution. The non-CFG control output is for display only and is not executable through the UI.
+
+## Validation
+
+There are three separate validation layers:
+
+- `npm run test:grammar` compiles the grammar with LLGuidance and runs the deterministic accept/reject corpus.
+- `npm run test:clickhouse-corpus` executes positive corpus cases against ClickHouse to catch parseable-but-invalid SQL.
+- `npm run eval` asks the live model to route prompts into the CFG tool or reject out-of-scope prompts, then checks SQL shape and execution.
+
+The corpus includes positive examples for single aggregate, grouped aggregate, time filters, and numeric filters. It includes negative examples for `SELECT *`, destructive statements, projection/`GROUP BY` mismatch, stacked statements, comment injection, and aliases.
+
+## When To Extend The Grammar
+
+Extend the grammar when we have a concrete demo question or product behavior that needs a new SQL family. Good candidates are:
+
+- `min(pickup_datetime)` and `max(pickup_datetime)` for dataset range questions.
+- `min()` / `max()` for numeric fields.
+- Time bucketing with a fixed set of safe ClickHouse functions.
+- Route leaderboards grouped by pickup and dropoff neighborhood.
+- Equality filters on pickup/dropoff neighborhood names, if we can constrain the value set safely.
+
+For each extension, add:
+
+- Positive corpus cases.
+- Negative corpus cases that prove the new surface does not allow nearby bad SQL.
+- Safety-validator tests if the validator needs new allowed functions/columns.
+- At least one eval case if the behavior is user-facing.
+
+If the grammar starts becoming large or awkward, consider switching the model output from raw SQL to a constrained query-intent object and compiling that object to SQL server-side.
