@@ -1,0 +1,57 @@
+[
+  {
+    "name": "single aggregate",
+    "input": "SELECT sum(total_amount) FROM nyc_taxi.trips_small;",
+    "should_parse": true
+  },
+  {
+    "name": "grouped aggregate by payment type",
+    "input": "SELECT payment_type, avg(tip_amount) FROM nyc_taxi.trips_small GROUP BY payment_type ORDER BY avg(tip_amount) DESC LIMIT 10;",
+    "should_parse": true
+  },
+  {
+    "name": "top pickup neighborhoods",
+    "input": "SELECT pickup_ntaname, sum(total_amount) FROM nyc_taxi.trips_small GROUP BY pickup_ntaname ORDER BY sum(total_amount) DESC LIMIT 10;",
+    "should_parse": true
+  },
+  {
+    "name": "time and passenger filter",
+    "input": "SELECT count() FROM nyc_taxi.trips_small WHERE pickup_datetime >= (SELECT max(pickup_datetime) FROM nyc_taxi.trips_small) - INTERVAL 7 DAY AND passenger_count > 2;",
+    "should_parse": true
+  },
+  {
+    "name": "decimal distance filter",
+    "input": "SELECT avg(trip_distance) FROM nyc_taxi.trips_small WHERE trip_distance >= 1.5;",
+    "should_parse": true
+  },
+  {
+    "name": "select star",
+    "input": "SELECT * FROM nyc_taxi.trips_small;",
+    "should_parse": false
+  },
+  {
+    "name": "drop table",
+    "input": "DROP TABLE nyc_taxi.trips_small;",
+    "should_parse": false
+  },
+  {
+    "name": "projection group by mismatch",
+    "input": "SELECT payment_type, sum(total_amount) FROM nyc_taxi.trips_small GROUP BY pickup_ntaname;",
+    "should_parse": false
+  },
+  {
+    "name": "stacked statement",
+    "input": "SELECT sum(total_amount) FROM nyc_taxi.trips_small; DELETE FROM nyc_taxi.trips_small;",
+    "should_parse": false
+  },
+  {
+    "name": "line comment injection",
+    "input": "SELECT sum(total_amount) FROM nyc_taxi.trips_small -- comment;",
+    "should_parse": false
+  },
+  {
+    "name": "unsupported alias",
+    "input": "SELECT sum(total_amount) AS total FROM nyc_taxi.trips_small;",
+    "should_parse": false
+  }
+]

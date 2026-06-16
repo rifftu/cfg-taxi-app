@@ -1,0 +1,7 @@
+- A deployed app where someone can type in a natural language query “sum the total of all orders placed in the last 30 hours” and see data from clickhouse returned.
+    - You must use GPT-5’s newly added Context Free Grammar
+- 3+ Evals for the generation of the CFG. You can roll your own eval framework, or use anything off the shelf. Don’t overthink this!
+    - The evals can be run from the app you deploy, a script, etc.
+- Use Tinybird or ClickHouse Cloud to ingest some CSV data. Choose any large, 1000+ row dataset you’d like.
+- Define a CFG for the ClickHouse table.
+- The app you make should have a prompt for typing in any query, and seeing the response that is returned from the API.
