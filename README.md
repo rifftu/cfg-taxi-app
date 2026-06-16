@@ -6,6 +6,11 @@ executes only the CFG query, and renders the results.
 
 ## Quick Start
 
+### Public deployment
+https://cfg-taxi-app.vercel.app/
+
+### Run locally
+
 ```bash
 npm ci
 npm run dev
